@@ -90,7 +90,7 @@ class APNService(BaseService):
         """
         return super(APNService, self)._connect(self.certificate, self.private_key, self.passphrase)
 
-    def push_notification_to_devices(self, notification, devices=None, chunk_size=100):
+    def push_notification_to_devices(self, notification, devices=None, chunk_size=240):
         """
         Sends the specific notification to devices.
         if `devices` is not supplied, all devices in the `APNService`'s device

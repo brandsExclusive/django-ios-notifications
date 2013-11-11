@@ -1,0 +1,29 @@
+{% extends "admin/change_form.html" %}{% load url from future %}
+{% block extrastyle %}
+    {{ block.super }}
+    <style type="text/css">
+        #feedback_service {
+            float: left;
+        }
+    </style>
+{% endblock %}
+{% block content %}
+{{ block.super }}
+{% with service=adminform.form.instance %}
+{% if service and service.id %}
+<div id="feedback_service">
+    <h2>Feedback Service</h2>
+    <p>Use the button below to run Apple feedback service</p>
+    <form action="{% url 'admin:admin_feedback_service' service.id %}" method="POST" id="feedback_service_form">
+        {% csrf_token %}
+        <input type="submit" value="Run!" />
+    </form>
+</div>
+<script type="text/javascript">
+    document.getElementById('feedback_service_form').onsubmit = function(e) {
+        return confirm('Are you sure you want to run feedback service?');
+    };
+</script>
+{% endif %}
+{% endwith %}
+{% endblock %}

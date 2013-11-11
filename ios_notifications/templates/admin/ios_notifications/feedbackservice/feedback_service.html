@@ -1,0 +1,18 @@
+{% extends "admin/base_site.html" %}{% load i18n %}{% load url from future %}
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+    <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
+    &rsaquo;  <a href="{% url 'admin:index' %}ios_notifications/">{% trans 'Ios_notifications' %}</a>
+    &rsaquo; <a href="{% url 'admin:index' %}ios_notifications/feedbackservice/">{% trans 'Feedback services' %}</a>
+</div>
+{% endblock %}
+{% block content %}
+<div id="content-main">
+    <h1>The feedback service was{% if not output or error_msg %} not{% endif %} successfully run.</h1>
+    <div>
+        {% if output %} {{ output }} {% endif %}
+
+        {% if error_msg %} {{ error_msg }} {% endif %}
+    </div>
+</div>
+{% endblock %}
