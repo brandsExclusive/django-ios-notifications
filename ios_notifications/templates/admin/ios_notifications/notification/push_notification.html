@@ -14,7 +14,6 @@
         The message:
         <pre>{{ notification.message }}</pre>
         <p>An email will be sent to you showing the status.</p>
-        {% if sent %}was sent to {{ num_devices }} device{% ifnotequal num_devices 1 %}s{% endifnotequal %}{% endif %}
     </div>
 </div>
 {% endblock %}
