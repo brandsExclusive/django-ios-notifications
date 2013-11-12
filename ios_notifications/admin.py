@@ -11,7 +11,6 @@ from django.shortcuts import get_object_or_404
 
 from .models import Device, Notification, APNService, FeedbackService
 from .forms import APNServiceForm
-from .exceptions import InvalidPassPhrase
 
 from bex.tasks.tasks import send_push_notification
 
@@ -68,11 +67,8 @@ class FeedbackServiceAdmin(admin.ModelAdmin):
         output = ''
         error_msg = ''
         if request.method == 'POST':
-            try:
-                num_deactivated = service.call()
-                output = '%d device%s deactivated.\n' % (num_deactivated, ' was' if num_deactivated == 1 else 's were')
-            except InvalidPassPhrase:
-                error_msg = "Invalid Passphrase!"
+            num_deactivated = service.call()
+            output = '%d device%s deactivated.\n' % (num_deactivated, ' was' if num_deactivated == 1 else 's were')
 
         return TemplateResponse(request, 'admin/ios_notifications/feedbackservice/feedback_service.html',
                                 {'service': service, 'output': output, 'error_msg': error_msg},
