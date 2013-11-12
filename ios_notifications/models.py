@@ -16,6 +16,7 @@ except ImportError:
 
 from django_fields.fields import EncryptedCharField
 import OpenSSL
+from OpenSSL.SSL import SysCallError
 
 from .exceptions import NotificationPayloadSizeExceeded, InvalidPassPhrase
 
@@ -90,7 +91,7 @@ class APNService(BaseService):
         """
         return super(APNService, self)._connect(self.certificate, self.private_key, self.passphrase)
 
-    def push_notification_to_devices(self, notification, devices=None, chunk_size=240):
+    def push_notification_to_devices(self, notification, devices=None, chunk_size=100, feedback_service=False):
         """
         Sends the specific notification to devices.
         if `devices` is not supplied, all devices in the `APNService`'s device
@@ -98,26 +99,44 @@ class APNService(BaseService):
         """
         if devices is None:
             devices = self.device_set.filter(is_active=True)
-        self._write_message(notification, devices, chunk_size)
 
-    def _write_message(self, notification, devices, chunk_size):
-        """
-        Writes the message for the supplied devices to
-        the APN Service SSL socket.
-        """
+        if feedback_service:
+            return self._write_message_with_feedback_service(notification, devices, chunk_size)
+        else:
+            return self._write_message(notification, devices, chunk_size)
+
+    def validate_notification_and_chunck_size(self, notification, chunk_size):
         if not isinstance(notification, Notification):
             raise TypeError('notification should be an instance of ios_notifications.models.Notification')
 
         if not isinstance(chunk_size, int) or chunk_size < 1:
             raise ValueError('chunk_size must be an integer greater than zero.')
 
-        payload = notification.payload
-
+    def split_devices_into_chunks(self, devices, chunk_size):
         # Split the devices into manageable chunks.
         # Chunk sizes being determined by the `chunk_size` arg.
         device_length = devices.count() if isinstance(devices, models.query.QuerySet) else len(devices)
         chunks = [devices[i:i + chunk_size] for i in xrange(0, device_length, chunk_size)]
 
+        return chunks
+
+    def set_last_sent_time(self, notification):
+        if notification.pk or notification.persist:
+            notification.last_sent_at = dt_now()
+            notification.save()
+            return True
+        return False
+
+    def _write_message(self, notification, devices, chunk_size):
+        """
+        Writes the message for the supplied devices to
+        the APN Service SSL socket.
+        """
+        self.validate_notification_and_chunck_size(notification, chunk_size)
+
+        payload = notification.payload
+
+        chunks = self.split_devices_into_chunks(devices, chunk_size)
         for index in xrange(len(chunks)):
             chunk = chunks[index]
             self._connect()
@@ -129,7 +148,7 @@ class APNService(BaseService):
                     self.connection.send(self.pack_message(payload, device))
                 except (OpenSSL.SSL.WantWriteError, socket.error) as e:
                     if isinstance(e, socket.error) and isinstance(e.args, tuple) and e.args[0] != errno.EPIPE:
-                        raise e  # Unexpected exception, raise it.
+                        raise  # Unexpected exception, raise it.
                     self._disconnect()
                     i = chunk.index(device)
                     self.set_devices_last_notified_at(chunk[:i])
@@ -138,15 +157,65 @@ class APNService(BaseService):
                     # if the device no longer accepts push notifications from your app
                     # and you send one to it anyways, Apple immediately drops the connection to your APNS socket.
                     # http://stackoverflow.com/a/13332486/1025116
-                    self._write_message(notification, chunk[i + 1:])
+                    self._write_message(notification, chunk[i + 1:], chunk_size)
 
             self._disconnect()
 
             self.set_devices_last_notified_at(chunk)
 
-        if notification.pk or notification.persist:
-            notification.last_sent_at = dt_now()
-            notification.save()
+        self.set_last_sent_time(notification)
+
+    def _write_message_with_feedback_service(self, notification, devices, chunk_size):
+        """
+        Writes the message for the supplied devices to
+        If Apple throw exception during the push,
+        Call Apple Feedback Service and retry from last sent device.
+        the APN Service SSL socket.
+        """
+        self.validate_notification_and_chunck_size(notification, chunk_size)
+
+        sent_count = 0
+        deactivated_count = 0
+        payload = notification.payload
+
+        chunks = self.split_devices_into_chunks(devices, chunk_size)
+        for chunk in chunks:
+            self._connect()
+
+            for idx, device in enumerate(chunk):
+                if not device.is_active:
+                    continue
+                try:
+                    self.connection.send(self.pack_message(payload, device))
+                    sent_count += 1
+                except (OpenSSL.SSL.WantWriteError, socket.error) as e:
+                    if isinstance(e, socket.error) and isinstance(e.args, tuple) and e.args[0] != errno.EPIPE:
+                        raise  # Unexpected exception, raise it.
+                    self._disconnect()
+                    self.set_devices_last_notified_at(chunk[:idx])
+                    # Start again from the next device.
+                    # We start from the next device since
+                    # if the device no longer accepts push notifications from your app
+                    # and you send one to it anyways, Apple immediately drops the connection to your APNS socket.
+                    # http://stackoverflow.com/a/13332486/1025116
+                    self._write_message(notification, chunk[idx + 1:], chunk_size)
+                except SysCallError:
+                    # For SysCallError, usually means Apple is hunging our communication and calling feedback service usually unblock it
+                    self.set_devices_last_notified_at(chunk[:idx])
+                    service = FeedbackService.objects.get(apn_service=notification.service)
+                    num_deactivated = service.call()
+                    deactivated_count += num_deactivated
+                    count, num_deactivated = self._write_message_with_feedback_service(notification, chunk[idx + 1:], chunk_size)
+                    sent_count += count
+                    deactivated_count += num_deactivated
+                    break  # the remaining devices in the current chunk were sent on the above call to _write_message_with_feedback_services
+
+            self._disconnect()
+
+            self.set_devices_last_notified_at(chunk)
+
+        self.set_last_sent_time(notification)
+        return sent_count, deactivated_count
 
     def set_devices_last_notified_at(self, devices):
         # Rather than do a save on every object,

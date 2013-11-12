@@ -13,6 +13,8 @@ from .models import Device, Notification, APNService, FeedbackService
 from .forms import APNServiceForm
 from .exceptions import InvalidPassPhrase
 
+from bex.tasks.tasks import send_push_notification
+
 
 class APNServiceAdmin(admin.ModelAdmin):
     list_display = ('name', 'hostname')
@@ -46,7 +48,8 @@ class NotificationAdmin(admin.ModelAdmin):
         if request.method == 'POST':
             service = notification.service
             num_devices = service.device_set.filter(is_active=True).count()
-            notification.service.push_notification_to_devices(notification)
+
+            send_push_notification.delay(notification, request.user.email)
         return TemplateResponse(request, 'admin/ios_notifications/notification/push_notification.html',
                                 {'notification': notification, 'num_devices': num_devices, 'sent': request.method == 'POST'},
                                 current_app='ios_notifications')
