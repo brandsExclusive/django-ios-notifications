@@ -12,6 +12,8 @@ from django.shortcuts import get_object_or_404
 from .models import Device, Notification, APNService, FeedbackService
 from .forms import APNServiceForm
 
+from bex.tasks.tasks import send_push_notification
+
 
 class APNServiceAdmin(admin.ModelAdmin):
     list_display = ('name', 'hostname')
@@ -45,12 +47,35 @@ class NotificationAdmin(admin.ModelAdmin):
         if request.method == 'POST':
             service = notification.service
             num_devices = service.device_set.filter(is_active=True).count()
-            notification.service.push_notification_to_devices(notification)
+
+            send_push_notification.delay(notification, request.user.email)
         return TemplateResponse(request, 'admin/ios_notifications/notification/push_notification.html',
                                 {'notification': notification, 'num_devices': num_devices, 'sent': request.method == 'POST'},
                                 current_app='ios_notifications')
 
+
+class FeedbackServiceAdmin(admin.ModelAdmin):
+    def get_urls(self):
+        urls = super(FeedbackServiceAdmin, self).get_urls()
+        feedbackservice_urls = patterns('',
+                                     url(r'^(?P<id>\d+)/feedback-service/$', self.admin_site.admin_view(self.admin_feedback_service),
+                                     name='admin_feedback_service'),)
+        return feedbackservice_urls + urls
+
+    def admin_feedback_service(self, request, **kwargs):
+        service = get_object_or_404(FeedbackService, **kwargs)
+        output = ''
+        error_msg = ''
+        if request.method == 'POST':
+            num_deactivated = service.call()
+            output = '%d device%s deactivated.\n' % (num_deactivated, ' was' if num_deactivated == 1 else 's were')
+
+        return TemplateResponse(request, 'admin/ios_notifications/feedbackservice/feedback_service.html',
+                                {'service': service, 'output': output, 'error_msg': error_msg},
+                                current_app='ios_notifications')
+
+
 admin.site.register(Device, DeviceAdmin)
 admin.site.register(Notification, NotificationAdmin)
 admin.site.register(APNService, APNServiceAdmin)
-admin.site.register(FeedbackService)
+admin.site.register(FeedbackService, FeedbackServiceAdmin)
