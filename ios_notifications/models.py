@@ -209,6 +209,7 @@ class APNService(BaseService):
                     sent_count += count
                     deactivated_count += num_deactivated
                     self.connection = None
+                    break  # the remaining devices in the current chunk were sent on the above call to _write_message_with_feedback_services
 
             self._disconnect()
 
