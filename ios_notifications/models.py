@@ -208,6 +208,7 @@ class APNService(BaseService):
                     count, num_deactivated = self._write_message_with_feedback_service(notification, chunk[idx + 1:], chunk_size)
                     sent_count += count
                     deactivated_count += num_deactivated
+                    self.connection = None
                     break  # the remaining devices in the current chunk were sent on the above call to _write_message_with_feedback_services
 
             self._disconnect()
@@ -215,6 +216,12 @@ class APNService(BaseService):
             self.set_devices_last_notified_at(chunk)
 
         self.set_last_sent_time(notification)
+
+        #do the feedback service after finishing the push notification.
+        service = FeedbackService.objects.get(apn_service=notification.service)
+        num_deactivated = service.call()
+        deactivated_count += num_deactivated
+
         return sent_count, deactivated_count
 
     def set_devices_last_notified_at(self, devices):
