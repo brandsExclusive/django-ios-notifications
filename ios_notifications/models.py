@@ -4,6 +4,7 @@ import struct
 import errno
 import json
 import logging
+import sys
 from binascii import hexlify, unhexlify
 
 from django.db import models
