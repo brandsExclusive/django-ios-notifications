@@ -3,6 +3,7 @@ import socket
 import struct
 import errno
 import json
+import logging
 from binascii import hexlify, unhexlify
 
 from django.db import models
@@ -19,6 +20,8 @@ import OpenSSL
 from OpenSSL.SSL import SysCallError
 
 from .exceptions import NotificationPayloadSizeExceeded, InvalidPassPhrase
+
+logger = logging.getLogger(__name__)
 
 
 class BaseService(models.Model):
@@ -60,8 +63,11 @@ class BaseService(models.Model):
         Closes the SSL socket connection.
         """
         if self.connection is not None:
-            self.connection.shutdown()
-            self.connection.close()
+            try:
+                self.connection.shutdown()
+                self.connection.close()
+            except Exception:
+                logger.error("iOS push notification disconnect error." , exc_info=sys.exc_info())
 
     class Meta:
         abstract = True
