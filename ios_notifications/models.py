@@ -5,7 +5,9 @@ import errno
 import json
 import logging
 import sys
+import time
 from binascii import hexlify, unhexlify
+from socket import timeout
 
 from django.db import models
 from django.conf import settings
@@ -90,13 +92,29 @@ class APNService(BaseService):
 
     PORT = 2195
     fmt = '!cH32sH%ds'
+    _total_timeout = 0
 
-    def _connect(self):
+    def _connect(self, retry=0):
         """
         Establishes an encrypted SSL socket connection to the service.
         After connecting the socket can be written to or read from.
         """
-        return super(APNService, self)._connect(self.certificate, self.private_key, self.passphrase)
+        try:
+            ret = super(APNService, self)._connect(self.certificate, self.private_key, self.passphrase)
+            self._total_timeout = 0
+            return ret
+        except timeout:
+            retry += 1
+            # Stop retry the connection if single connection been retryed more than 3 times
+            # or the total timeout on connection exceeds 12 times
+            if retry > 2 or (self._total_timeout > 11):
+                raise
+            # sleep 3 seconds before retrying the connnection
+            print "TIME OUT BEFORE retry", retry, self._total_timeout
+            time.sleep(3)
+            self._total_timeout += 1
+
+            return self._connect(retry)
 
     def push_notification_to_devices(self, notification, devices=None, chunk_size=100, feedback_service=False):
         """
@@ -181,45 +199,17 @@ class APNService(BaseService):
 
         sent_count = 0
         deactivated_count = 0
-        payload = notification.payload
 
         chunks = self.split_devices_into_chunks(devices, chunk_size)
-        for chunk in chunks:
-            self._connect()
-
-            for idx, device in enumerate(chunk):
-                if not device.is_active:
-                    continue
-                try:
-                    self.connection.send(self.pack_message(payload, device))
-                    sent_count += 1
-                except (OpenSSL.SSL.WantWriteError, socket.error) as e:
-                    if isinstance(e, socket.error) and isinstance(e.args, tuple) and e.args[0] != errno.EPIPE:
-                        raise  # Unexpected exception, raise it.
-                    self._disconnect()
-                    self.set_devices_last_notified_at(chunk[:idx])
-                    # Start again from the next device.
-                    # We start from the next device since
-                    # if the device no longer accepts push notifications from your app
-                    # and you send one to it anyways, Apple immediately drops the connection to your APNS socket.
-                    # http://stackoverflow.com/a/13332486/1025116
-                    self._write_message(notification, chunk[idx + 1:], chunk_size)
-                except SysCallError:
-                    # For SysCallError, usually means Apple is hunging our communication and calling feedback service usually unblock it
-                    self.set_devices_last_notified_at(chunk[:idx])
-                    service = FeedbackService.objects.get(apn_service=notification.service)
-                    num_deactivated = service.call()
-                    deactivated_count += num_deactivated
-                    count, num_deactivated = self._write_message_with_feedback_service(notification, chunk[idx + 1:], chunk_size)
-                    sent_count += count
-                    deactivated_count += num_deactivated
-                    self.connection = None
-                    break  # the remaining devices in the current chunk were sent on the above call to _write_message_with_feedback_services
-
-            self._disconnect()
-
-            self.set_devices_last_notified_at(chunk)
-
+        error_msg = ''
+        for chunk_num, chunk in enumerate(chunks):
+            try:
+                chunk_sent_count, chunk_deactivated_count = self.send_chunk(chunk=chunk, notification=notification)
+                sent_count += chunk_sent_count
+                deactivated_count += chunk_deactivated_count
+            except Exception:
+                error_msg += "Notification chuck #%s, because of %s." % (chunk_num, sys.exc_info())
+                print error_msg
         self.set_last_sent_time(notification)
 
         #do the feedback service after finishing the push notification.
@@ -227,9 +217,51 @@ class APNService(BaseService):
         num_deactivated = service.call()
         deactivated_count += num_deactivated
 
-        return sent_count, deactivated_count
+        return sent_count, deactivated_count, error_msg
 
-    def set_devices_last_notified_at(self, devices):
+    def send_chunk(self, chunk, notification):
+        self._connect()
+        chunk_sent_count = 0
+        chunk_deactivated_count = 0
+        payload = notification.payload
+
+        for idx, device in enumerate(chunk):
+            if not device.is_active:
+                continue
+            if device.has_received(notification):
+                continue
+
+            try:
+                self.connection.send(self.pack_message(payload, device))
+                chunk_sent_count += 1
+            except (OpenSSL.SSL.WantWriteError, socket.error) as e:
+                if isinstance(e, socket.error) and isinstance(e.args, tuple) and e.args[0] != errno.EPIPE:
+                    raise  # Unexpected exception, raise it.
+                self.set_devices_last_notified_at(chunk[:idx])
+                self._disconnect()
+                # Start again from the next device.
+                # We start from the next device since
+                # if the device no longer accepts push notifications from your app
+                # and you send one to it anyways, Apple immediately drops the connection to your APNS socket.
+                # http://stackoverflow.com/a/13332486/1025116
+                self._write_message(notification, chunk[idx + 1:], chunk_size)
+            except SysCallError:
+                # For SysCallError, usually means Apple is hunging our communication and calling feedback service usually unblock it
+                self.set_devices_last_notified_at(chunk[:idx])
+                service = FeedbackService.objects.get(apn_service=notification.service)
+                num_deactivated = service.call()
+                chunk_deactivated_count += num_deactivated
+                count, num_deactivated, error_msg = self._write_message_with_feedback_service(notification, chunk[idx + 1:], chunk_size)
+                chunk_deactivated_count += count
+                deactivated_count += num_deactivated
+                self.connection = None
+                break  # the remaining devices in the current chunk were sent on the above call to _write_message_with_feedback_services
+
+        self.set_devices_last_notified_at(chunk, notification)
+        self._disconnect()
+        return chunk_sent_count, chunk_deactivated_count
+
+    def set_devices_last_notified_at(self, devices, notification):
         # Rather than do a save on every object,
         # fetch another queryset and use it to update
         # the devices in a single query.
@@ -237,6 +269,7 @@ class APNService(BaseService):
         # we can't rely on devices.update() even if devices is
         # a queryset object.
         Device.objects.filter(pk__in=[d.pk for d in devices]).update(last_notified_at=dt_now())
+        notification.devices.add(*devices)
 
     def pack_message(self, payload, device):
         """
@@ -340,6 +373,7 @@ class Device(models.Model):
     platform = models.CharField(max_length=30, blank=True, null=True)
     display = models.CharField(max_length=30, blank=True, null=True)
     os_version = models.CharField(max_length=20, blank=True, null=True)
+    messages = models.ManyToManyField('Notification', related_name='devices')
 
     def push_notification(self, notification):
         """
@@ -356,6 +390,10 @@ class Device(models.Model):
 
     class Meta:
         unique_together = ('token', 'service')
+
+    def has_received(self, notification):
+        message_count = self.messages.filter(id=notification.pk).count()
+        return True if message_count >= 1 else False
 
 
 class FeedbackService(BaseService):
