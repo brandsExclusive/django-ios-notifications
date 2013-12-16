@@ -68,7 +68,7 @@ class BaseService(models.Model):
         # See http://bugs.python.org/issue3823
         # Therefore pyOpenSSL which lets us do this is a dependancy.
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(getattr(settings, 'IOS_NOTIFICATION_CONNECT_TIMEOUT', 60)
+        sock.settimeout(getattr(settings, 'IOS_NOTIFICATION_CONNECT_TIMEOUT', 60))
         cert = OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_PEM, certificate)
         args = [OpenSSL.crypto.FILETYPE_PEM, private_key]
         if passphrase is not None:
