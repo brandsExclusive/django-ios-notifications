@@ -36,7 +36,30 @@ class BaseService(models.Model):
     PORT = 0  # Should be overriden by subclass
     connection = None
 
-    def _connect(self, certificate, private_key, passphrase=None):
+    _total_timeout = 0
+
+    def _connect(self, certificate, private_key, passphrase=None, retry=0):
+        """
+        Establishes an encrypted SSL socket connection to the service.
+        After connecting the socket can be written to or read from.
+        """
+        try:
+            ret = self.ssl_connect(certificate, private_key, passphrase)
+            self._total_timeout = 0
+            return ret
+        except timeout:
+            retry += 1
+            # Stop retry the connection if single connection been retryed more than 3 times
+            # or the total timeout on connection exceeds 12 times
+            if retry > 2 or (self._total_timeout > 11):
+                raise
+            # sleep 3 seconds before retrying the connnection
+            time.sleep(3)
+            self._total_timeout += 1
+
+            return self._connect(certificate, private_key, passphrase, retry)
+
+    def ssl_connect(self, certificate, private_key, passphrase=None):
         """
         Establishes an encrypted SSL socket connection to the service.
         After connecting the socket can be written to or read from.
@@ -92,29 +115,13 @@ class APNService(BaseService):
 
     PORT = 2195
     fmt = '!cH32sH%ds'
-    _total_timeout = 0
 
-    def _connect(self, retry=0):
+    def _connect(self):
         """
         Establishes an encrypted SSL socket connection to the service.
         After connecting the socket can be written to or read from.
         """
-        try:
-            ret = super(APNService, self)._connect(self.certificate, self.private_key, self.passphrase)
-            self._total_timeout = 0
-            return ret
-        except timeout:
-            retry += 1
-            # Stop retry the connection if single connection been retryed more than 3 times
-            # or the total timeout on connection exceeds 12 times
-            if retry > 2 or (self._total_timeout > 11):
-                raise
-            # sleep 3 seconds before retrying the connnection
-            print "TIME OUT BEFORE retry", retry, self._total_timeout
-            time.sleep(3)
-            self._total_timeout += 1
-
-            return self._connect(retry)
+        return super(APNService, self)._connect(self.certificate, self.private_key, self.passphrase)
 
     def push_notification_to_devices(self, notification, devices=None, chunk_size=100, feedback_service=False):
         """
@@ -202,14 +209,13 @@ class APNService(BaseService):
 
         chunks = self.split_devices_into_chunks(devices, chunk_size)
         error_msg = ''
-        for chunk_num, chunk in enumerate(chunks):
+        for chunk_num, chunk in enumerate(chunks, 1):
             try:
                 chunk_sent_count, chunk_deactivated_count = self.send_chunk(chunk=chunk, notification=notification)
                 sent_count += chunk_sent_count
                 deactivated_count += chunk_deactivated_count
             except Exception:
                 error_msg += "Notification chuck #%s, because of %s." % (chunk_num, sys.exc_info())
-                print error_msg
         self.set_last_sent_time(notification)
 
         #do the feedback service after finishing the push notification.
@@ -392,8 +398,7 @@ class Device(models.Model):
         unique_together = ('token', 'service')
 
     def has_received(self, notification):
-        message_count = self.messages.filter(id=notification.pk).count()
-        return True if message_count >= 1 else False
+        return self.messages.filter(id=notification.pk).count()
 
 
 class FeedbackService(BaseService):
