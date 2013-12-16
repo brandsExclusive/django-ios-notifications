@@ -29,7 +29,7 @@ class DeviceAdmin(admin.ModelAdmin):
 
 class NotificationAdmin(admin.ModelAdmin):
     exclude = ('last_sent_at',)
-    list_display = ('message', 'badge', 'sound', 'custom_payload', 'created_at', 'last_sent_at',)
+    list_display = ('message', 'badge', 'sound', 'custom_payload', 'created_at', 'last_sent_at', 'num_of_sent')
     list_filter = ('created_at', 'last_sent_at')
     search_fields = ('message', 'custom_payload')
     list_display_links = ('message', 'custom_payload',)
