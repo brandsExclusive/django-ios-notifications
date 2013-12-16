@@ -215,7 +215,7 @@ class APNService(BaseService):
                 sent_count += chunk_sent_count
                 deactivated_count += chunk_deactivated_count
             except Exception:
-                error_msg += "Notification chuck #%s, because of %s." % (chunk_num, sys.exc_info())
+                error_msg += "Notification chuck #%s failed. \n\n %s." % (chunk_num, sys.exc_info())
         self.set_last_sent_time(notification)
 
         #do the feedback service after finishing the push notification.
