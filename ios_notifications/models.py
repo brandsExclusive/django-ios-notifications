@@ -217,7 +217,7 @@ class APNService(BaseService):
                 deactivated_count += chunk_deactivated_count
             except Exception as error:
                 logger.error("Error sending push notification.", exc_info=sys.exc_info())
-                error_msg += "Notification chuck #%s has failed. \n\n %s." % (chunk_num, error)
+                error_msg += "Notification chunk #%s has failed. \n\n %s." % (chunk_num, error)
         self.set_last_sent_time(notification)
 
         #do the feedback service after finishing the push notification.
