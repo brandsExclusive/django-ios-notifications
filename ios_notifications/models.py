@@ -224,10 +224,10 @@ class APNService(BaseService):
         service = FeedbackService.objects.get(apn_service=notification.service)
         try:
             num_deactivated = service.call()
+            deactivated_count += num_deactivated
         except Exception as error:
             logger.error("Error sending push notification.", exc_info=sys.exc_info())
             error_msg += "The final feedback service has failed. \n\n %s" % error
-        deactivated_count += num_deactivated
 
         return sent_count, deactivated_count, error_msg
 
