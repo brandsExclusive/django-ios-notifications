@@ -315,6 +315,9 @@ class Notification(models.Model):
     def __unicode__(self):
         return u'%s%s%s' % (self.message, ' ' if self.message and self.custom_payload else '', self.custom_payload)
 
+    def num_of_sent(self):
+        return self.devices.count()
+
     @property
     def extra(self):
         """
