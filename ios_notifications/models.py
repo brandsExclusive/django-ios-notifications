@@ -68,6 +68,7 @@ class BaseService(models.Model):
         # See http://bugs.python.org/issue3823
         # Therefore pyOpenSSL which lets us do this is a dependancy.
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(getattr(settings, 'IOS_NOTIFICATION_CONNECT_TIMEOUT', 60)
         cert = OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_PEM, certificate)
         args = [OpenSSL.crypto.FILETYPE_PEM, private_key]
         if passphrase is not None:
@@ -214,13 +215,18 @@ class APNService(BaseService):
                 chunk_sent_count, chunk_deactivated_count = self.send_chunk(chunk=chunk, notification=notification)
                 sent_count += chunk_sent_count
                 deactivated_count += chunk_deactivated_count
-            except Exception:
-                error_msg += "Notification chuck #%s failed. \n\n %s." % (chunk_num, sys.exc_info())
+            except Exception as error:
+                logger.error("Error sending push notification.", exc_info=sys.exc_info())
+                error_msg += "Notification chuck #%s has failed. \n\n %s." % (chunk_num, error)
         self.set_last_sent_time(notification)
 
         #do the feedback service after finishing the push notification.
         service = FeedbackService.objects.get(apn_service=notification.service)
-        num_deactivated = service.call()
+        try:
+            num_deactivated = service.call()
+        except Exception as error:
+            logger.error("Error sending push notification.", exc_info=sys.exc_info())
+            error_msg += "The final feedback service has failed. \n\n %s" % error
         deactivated_count += num_deactivated
 
         return sent_count, deactivated_count, error_msg
