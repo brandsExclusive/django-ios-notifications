@@ -38,16 +38,17 @@ class BaseService(models.Model):
 
     _total_timeout = 0
 
-    def _connect(self, certificate, private_key, passphrase=None, retry=0):
+    def _connect(self, retry=0):
         """
         Establishes an encrypted SSL socket connection to the service.
         After connecting the socket can be written to or read from.
         """
+
         try:
-            ret = self.ssl_connect(certificate, private_key, passphrase)
+            ret = self.ssl_connect()
             self._total_timeout = 0
             return ret
-        except timeout:
+        except (timeout, WantReadError):
             retry += 1
             # Stop retry the connection if single connection been retryed more than 3 times
             # or the total timeout on connection exceeds 12 times
@@ -57,22 +58,22 @@ class BaseService(models.Model):
             time.sleep(3)
             self._total_timeout += 1
 
-            return self._connect(certificate, private_key, passphrase, retry)
+            return self._connect(retry)
 
-    def ssl_connect(self, certificate, private_key, passphrase=None):
+    def ssl_connect(self):
         """
         Establishes an encrypted SSL socket connection to the service.
         After connecting the socket can be written to or read from.
         """
+
         # ssl in Python < 3.2 does not support certificates/keys as strings.
         # See http://bugs.python.org/issue3823
         # Therefore pyOpenSSL which lets us do this is a dependancy.
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(getattr(settings, 'IOS_NOTIFICATION_CONNECT_TIMEOUT', 60))
-        cert = OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_PEM, certificate)
-        args = [OpenSSL.crypto.FILETYPE_PEM, private_key]
-        if passphrase is not None:
-            args.append(str(passphrase))
+        cert = OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_PEM, self.certificate)
+        args = [OpenSSL.crypto.FILETYPE_PEM, self.private_key]
+        if self.passphrase is not None:
+            args.append(str(self.passphrase))
         try:
             pkey = OpenSSL.crypto.load_privatekey(*args)
         except OpenSSL.crypto.Error:
@@ -116,13 +117,6 @@ class APNService(BaseService):
 
     PORT = 2195
     fmt = '!cH32sH%ds'
-
-    def _connect(self):
-        """
-        Establishes an encrypted SSL socket connection to the service.
-        After connecting the socket can be written to or read from.
-        """
-        return super(APNService, self)._connect(self.certificate, self.private_key, self.passphrase)
 
     def push_notification_to_devices(self, notification, devices=None, chunk_size=100, feedback_service=False):
         """
@@ -424,11 +418,17 @@ class FeedbackService(BaseService):
 
     fmt = '!lh32s'
 
-    def _connect(self):
-        """
-        Establishes an encrypted socket connection to the feedback service.
-        """
-        return super(FeedbackService, self)._connect(self.apn_service.certificate, self.apn_service.private_key, self.apn_service.passphrase)
+    @property
+    def certificate(self):
+        return self.apn_service.certificate
+
+    @property
+    def private_key(self):
+        return self.apn_service.private_key
+
+    @property
+    def passphrase(self):
+        return self.apn_service.passphrase
 
     def call(self):
         """
