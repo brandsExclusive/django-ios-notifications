@@ -48,7 +48,7 @@ class BaseService(models.Model):
             ret = self.ssl_connect()
             self._total_timeout = 0
             return ret
-        except (timeout, WantReadError):
+        except timeout:
             retry += 1
             # Stop retry the connection if single connection been retryed more than 3 times
             # or the total timeout on connection exceeds 12 times
@@ -65,7 +65,6 @@ class BaseService(models.Model):
         Establishes an encrypted SSL socket connection to the service.
         After connecting the socket can be written to or read from.
         """
-
         # ssl in Python < 3.2 does not support certificates/keys as strings.
         # See http://bugs.python.org/issue3823
         # Therefore pyOpenSSL which lets us do this is a dependancy.
