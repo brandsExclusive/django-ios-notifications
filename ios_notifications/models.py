@@ -177,14 +177,14 @@ class APNService(BaseService):
                         raise  # Unexpected exception, raise it.
                     self._disconnect()
                     i = chunk.index(device)
-                    self.set_devices_last_notified_at(chunk[:i])
+                    self.set_devices_last_notified_at(chunk[:i], notification)
                     # Start again from the next device.
                     # We start from the next device since
                     # if the device no longer accepts push notifications from your app
                     # and you send one to it anyways, Apple immediately drops the connection to your APNS socket.
                     # http://stackoverflow.com/a/13332486/1025116
                     self._write_message(notification, chunk[i + 1:], chunk_size)
-            self.set_devices_last_notified_at(chunk)
+            self.set_devices_last_notified_at(chunk, notification)
             self._disconnect()
 
         self.set_last_sent_time(notification)
@@ -242,7 +242,7 @@ class APNService(BaseService):
             except (OpenSSL.SSL.WantWriteError, socket.error) as e:
                 if isinstance(e, socket.error) and isinstance(e.args, tuple) and e.args[0] != errno.EPIPE:
                     raise  # Unexpected exception, raise it.
-                self.set_devices_last_notified_at(chunk[:idx])
+                self.set_devices_last_notified_at(chunk[:idx], notification)
                 self._disconnect()
                 # Start again from the next device.
                 # We start from the next device since
@@ -252,7 +252,7 @@ class APNService(BaseService):
                 self._write_message(notification, chunk[idx + 1:], chunk_size)
             except SysCallError:
                 # For SysCallError, usually means Apple is hunging our communication and calling feedback service usually unblock it
-                self.set_devices_last_notified_at(chunk[:idx])
+                self.set_devices_last_notified_at(chunk[:idx], notification)
                 service = FeedbackService.objects.get(apn_service=notification.service)
                 num_deactivated = service.call()
                 chunk_deactivated_count += num_deactivated
