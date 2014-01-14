@@ -205,12 +205,12 @@ class APNService(BaseService):
         error_msg = ''
         for chunk_num, chunk in enumerate(chunks, 1):
             try:
-                chunk_sent_count, chunk_deactivated_count = self.send_chunk(chunk=chunk, notification=notification)
+                chunk_sent_count, chunk_deactivated_count = self.send_chunk(chunk=chunk, notification=notification, chunk_size=chunk_size)
                 sent_count += chunk_sent_count
                 deactivated_count += chunk_deactivated_count
             except Exception as error:
                 logger.error("Error sending push notification.", exc_info=sys.exc_info())
-                error_msg += "Notification chunk #%s has failed. \n\n %s." % (chunk_num, error)
+                error_msg += "Notification chunk #%s has failed. \n\n %s.\n\n" % (chunk_num, error)
         self.set_last_sent_time(notification)
 
         #do the feedback service after finishing the push notification.
@@ -224,7 +224,7 @@ class APNService(BaseService):
 
         return sent_count, deactivated_count, error_msg
 
-    def send_chunk(self, chunk, notification):
+    def send_chunk(self, chunk, notification, chunk_size):
         self._connect()
         chunk_sent_count = 0
         chunk_deactivated_count = 0
@@ -254,11 +254,13 @@ class APNService(BaseService):
                 # For SysCallError, usually means Apple is hunging our communication and calling feedback service usually unblock it
                 self.set_devices_last_notified_at(chunk[:idx], notification)
                 service = FeedbackService.objects.get(apn_service=notification.service)
+
                 num_deactivated = service.call()
                 chunk_deactivated_count += num_deactivated
+
                 count, num_deactivated, error_msg = self._write_message_with_feedback_service(notification, chunk[idx + 1:], chunk_size)
-                chunk_deactivated_count += count
-                deactivated_count += num_deactivated
+                chunk_sent_count += count
+                chunk_deactivated_count += num_deactivated
                 self.connection = None
                 break  # the remaining devices in the current chunk were sent on the above call to _write_message_with_feedback_services
 
