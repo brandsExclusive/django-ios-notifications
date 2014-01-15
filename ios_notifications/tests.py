@@ -5,6 +5,9 @@ import os
 import json
 import uuid
 import StringIO
+from mock import patch
+from itertools import cycle, chain
+from OpenSSL.SSL import SysCallError, WantWriteError
 
 import django
 from django.test import TestCase
@@ -20,7 +23,7 @@ except ImportError:
     import datetime
     dt_now = datetime.datetime.now
 
-from .models import APNService, Device, Notification, NotificationPayloadSizeExceeded
+from .models import APNService, Device, Notification, NotificationPayloadSizeExceeded, FeedbackService
 from .http import JSONResponse
 from .utils import generate_cert_and_pkey
 from .forms import APNServiceForm
@@ -43,6 +46,7 @@ class APNServiceTest(TestCase):
 
         self.device = Device.objects.create(token=TOKEN, service=self.service)
         self.notification = Notification.objects.create(message='Test message', service=self.service)
+        FeedbackService.objects.create(apn_service=self.service)
 
     def test_invalid_payload_size(self):
         n = Notification(message='.' * 250)
@@ -89,6 +93,51 @@ class APNServiceTest(TestCase):
         device_count = len(devices)
         self.assertEquals(device_count,
                           Device.objects.filter(last_notified_at__gte=started_at).count())
+
+    def test_pushing_notification_in_chunks_with_feedback_service(self):
+        devices = []
+        for i in xrange(10):
+            token = uuid.uuid1().get_hex() * 2
+            device = Device.objects.create(token=token, service=self.service)
+            devices.append(device)
+
+        started_at = dt_now()
+        self.service.push_notification_to_devices(self.notification, devices, chunk_size=2, feedback_service=True)
+        device_count = len(devices)
+        self.assertEquals(device_count,
+                          Device.objects.filter(last_notified_at__gte=started_at).count())
+
+    def test_pushing_notification_in_chunks_with_feedback_service_SysCallError(self):
+        devices = []
+        for i in xrange(10):
+            token = uuid.uuid1().get_hex() * 2
+            device = Device.objects.create(token=token, service=self.service)
+            devices.append(device)
+
+        started_at = dt_now()
+        endless_success = cycle([None])
+        with patch('OpenSSL.SSL.Connection') as mocked_Connection:
+            conn = mocked_Connection.return_value
+            conn.send.side_effect = chain([SysCallError()], endless_success)
+            self.service.push_notification_to_devices(self.notification, devices, chunk_size=2, feedback_service=True)
+            device_count = len(devices)
+            self.assertEquals(device_count, Device.objects.filter(last_notified_at__gte=started_at).count())
+
+    def test_pushing_notification_in_chunks_with_feedback_service_WantWriteError(self):
+        devices = []
+        for i in xrange(10):
+            token = uuid.uuid1().get_hex() * 2
+            device = Device.objects.create(token=token, service=self.service)
+            devices.append(device)
+
+        started_at = dt_now()
+        endless_success = cycle([None])
+        with patch('OpenSSL.SSL.Connection') as mocked_Connection:
+            conn = mocked_Connection.return_value
+            conn.send.side_effect = chain([WantWriteError()], endless_success)
+            self.service.push_notification_to_devices(self.notification, devices, chunk_size=2, feedback_service=True)
+            device_count = len(devices)
+            self.assertEquals(device_count, Device.objects.filter(last_notified_at__gte=started_at).count())
 
     @classmethod
     def tearDownClass(cls):

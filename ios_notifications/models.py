@@ -205,7 +205,7 @@ class APNService(BaseService):
         error_msg = ''
         for chunk_num, chunk in enumerate(chunks, 1):
             try:
-                chunk_sent_count, chunk_deactivated_count = self.send_chunk(chunk=chunk, notification=notification, chunk_size=chunk_size)
+                chunk_sent_count, chunk_deactivated_count = self.send_chunk(chunk=chunk, notification=notification)
                 sent_count += chunk_sent_count
                 deactivated_count += chunk_deactivated_count
             except Exception as error:
@@ -224,18 +224,16 @@ class APNService(BaseService):
 
         return sent_count, deactivated_count, error_msg
 
-    def send_chunk(self, chunk, notification, chunk_size):
+    def send_chunk(self, chunk, notification):
         self._connect()
         chunk_sent_count = 0
         chunk_deactivated_count = 0
         payload = notification.payload
-
-        for idx, device in enumerate(chunk):
+        for idx, device in enumerate(chunk, 1):
             if not device.is_active:
                 continue
             if device.has_received(notification):
                 continue
-
             try:
                 self.connection.send(self.pack_message(payload, device))
                 chunk_sent_count += 1
@@ -249,18 +247,21 @@ class APNService(BaseService):
                 # if the device no longer accepts push notifications from your app
                 # and you send one to it anyways, Apple immediately drops the connection to your APNS socket.
                 # http://stackoverflow.com/a/13332486/1025116
-                self._write_message(notification, chunk[idx + 1:], chunk_size)
+                self._write_message(notification, chunk[idx + 1:], len(chunk))
             except SysCallError:
                 # For SysCallError, usually means Apple is hunging our communication and calling feedback service usually unblock it
                 self.set_devices_last_notified_at(chunk[:idx], notification)
-                service = FeedbackService.objects.get(apn_service=notification.service)
+                try:
+                    service = FeedbackService.objects.get(apn_service=notification.service)
+                    num_deactivated = service.call()
+                    chunk_deactivated_count += num_deactivated
+                except Exception as error:
+                    logger.error("Feedback service during SysCallError has failed. \n\n %s" % error, exc_info=sys.exc_info())
 
-                num_deactivated = service.call()
-                chunk_deactivated_count += num_deactivated
-
-                count, num_deactivated, error_msg = self._write_message_with_feedback_service(notification, chunk[idx + 1:], chunk_size)
+                count, num_deactivated, error_msg = self._write_message_with_feedback_service(notification, chunk[idx + 1:], len(chunk))
                 chunk_sent_count += count
                 chunk_deactivated_count += num_deactivated
+
                 self.connection = None
                 break  # the remaining devices in the current chunk were sent on the above call to _write_message_with_feedback_services
 
@@ -276,7 +277,9 @@ class APNService(BaseService):
         # we can't rely on devices.update() even if devices is
         # a queryset object.
         Device.objects.filter(pk__in=[d.pk for d in devices]).update(last_notified_at=dt_now())
-        notification.devices.add(*devices)
+        if notification.persist:
+            notification.save()
+            notification.devices.add(*devices)
 
     def pack_message(self, payload, device):
         """
@@ -383,7 +386,7 @@ class Device(models.Model):
     platform = models.CharField(max_length=30, blank=True, null=True)
     display = models.CharField(max_length=30, blank=True, null=True)
     os_version = models.CharField(max_length=20, blank=True, null=True)
-    messages = models.ManyToManyField('Notification', related_name='devices')
+    messages = models.ManyToManyField('Notification', related_name='devices', null=True, blank=True)
 
     def push_notification(self, notification):
         """
